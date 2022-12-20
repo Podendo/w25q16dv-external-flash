@@ -16,170 +16,218 @@
 #define FLASH_NSS_PORT         GPIOA
 #define FLASH_NSS_PIN          GPIO15
 
-#define W25Q_MAX_DELAY_MS      0x0F
+#define W25Q_MAX_DELAY_MS      0xFF
 
 #define W25Q_SELECT()          gpio_clear(FLASH_NSS_PORT, FLASH_NSS_PIN)
 #define W25Q_UNSELECT()        gpio_set(FLASH_NSS_PORT, FLASH_NSS_PIN)
 
 extern volatile uint32_t flash_sys_ms = 0;
 
-void w25q_send_byte(uint8_t data)
+extern void sleep_ms(uint32_t delay_millis);
+
+
+uint8_t w25q_handler(void)
 {
-    spi_send(FLASH_SPI, data);
+    usart_send_blocking(USART2, 0xFF);
+    gpio_toggle(GPIOA, GPIO1);
 
     return;
 }
 
-
-uint8_t w25q_read_byte(void)
+/* Works correct */
+uint8_t w25q_transfer_byte(uint8_t data)
 {
-    uint8_t data = 0x00;
-    uint32_t msec = flash_sys_ms;
+    uint32_t timeout = flash_sys_ms;
 
-    //data = spi_read(FLASH_SPI);
-    do{
-        if((SPI_SR(FLASH_SPI) & SPI_SR_RXNE) != 0){
-            data = SPI_DR(FLASH_SPI);
-            gpio_toggle(GPIOD, GPIO14);
-            return data;
-        }
+    while((SPI_SR(FLASH_SPI) & SPI_SR_TXE) == 0){
+        if((flash_sys_ms - timeout) > W25Q_MAX_DELAY_MS)
+            return w25q_handler();
+    }
+    spi_send(FLASH_SPI, data);
+    while((SPI_SR(FLASH_SPI) & SPI_SR_RXNE) == 0){
+        if((flash_sys_ms - timeout) > W25Q_MAX_DELAY_MS)
+            return w25q_handler();
+    }
 
-    } while((flash_sys_ms - msec) < W25Q_MAX_DELAY_MS);
-
-    return data;
+    return (uint8_t)SPI_DR(FLASH_SPI);
 }
 
-
+/* Works correct */
 void w25q_write_enable(void)
 {
     W25Q_SELECT();
-    w25q_send_byte(W25Q_WRITE_ENA);
+    w25q_transfer_byte(W25Q_WRITE_ENA);
     W25Q_UNSELECT();
 
     return;
 }
 
-
+/* Works correct */
 void w25q_write_disable(void)
 {
+
     W25Q_SELECT();
-    w25q_send_byte(W25Q_WRITE_DIS);
+    w25q_transfer_byte(W25Q_WRITE_DIS);
     W25Q_UNSELECT();
 
     return;
 }
 
-
+/* Works correct */
 uint8_t w25q_status_reg_read(uint8_t SRx)
 {
-    uint8_t reg_bits = 0;
-
-    w25q_write_enable();
+    uint8_t reg_bits = 0x00;
     W25Q_SELECT();
 
     switch (SRx)
     {
     case W25Q_SR1:
-        w25q_send_byte(W25Q_READ_SR1);
+        w25q_transfer_byte(W25Q_READ_SR1);
+        reg_bits = w25q_transfer_byte(0x00);
         break;
     case W25Q_SR2:
-        w25q_send_byte(W25Q_READ_SR2);
+        w25q_transfer_byte(W25Q_READ_SR2);
+        reg_bits = w25q_transfer_byte(0x00);
         break;
     default:
         break;
     }
 
-    reg_bits = w25q_read_byte();
-    w25q_write_disable();
+    W25Q_UNSELECT();
 
     return reg_bits;
 }
 
-
-/* ToDo: Still don't understand the procedure of executing this func in  ds 
-
-void w25q_status_reg_write(uint8_t SRx, uint8_t reg_bits)
+/* Works correct */
+void w25q_status_reg_write(struct w25q_sr1 *sr1, struct w25q_sr2 *sr2)
 {
+    uint8_t frame_sr1 = 0x00;
+    uint8_t frame_sr2 = 0x00;
+
     w25q_write_enable();
     W25Q_SELECT();
 
-    switch (SRx)
-    {
-    case SR1:
-        break;
-    case SR2:
-        break;
-    default:
-        break;
-    }
+    frame_sr1 |= sr1->protect_1;
+    frame_sr1 |= sr1->sector_protect;
+    frame_sr1 |= sr1->topbtm_protect;
+    frame_sr1 |= sr1->block_protect;
 
+    frame_sr1 |= sr1->latch;
+    frame_sr1 |= sr1->status;
+
+    frame_sr2 |= sr2->suspend;
+    frame_sr2 |= sr2->quad_spi;
+    frame_sr2 |= sr2->protect_2;
+
+    w25q_transfer_byte(W25Q_WRITE_SR);
+
+    w25q_transfer_byte(frame_sr1);
+    w25q_transfer_byte(frame_sr2);
+
+
+    W25Q_UNSELECT();
     w25q_write_disable();
 
     return;
 }
-*/
 
+
+/* ??? */
 void w25q_read_data(uint32_t address, uint8_t *databuf, uint8_t buff_size)
 {
-    uint8_t byte = 0;
 
     w25q_write_enable();
     W25Q_SELECT();
 
-    w25q_send_byte(W25Q_READ_DATA);
+    w25q_transfer_byte(W25Q_READ_DATA);
 
-    w25q_send_byte((address >> 16) & 0xFF);
-    w25q_send_byte((address >> 8) & 0xFF);
-    w25q_send_byte((address >> 0) & 0xFF);
+    w25q_transfer_byte((address >> 16) & 0xFF);
+    w25q_transfer_byte((address >> 8) & 0xFF);
+    w25q_transfer_byte((address >> 0) & 0xFF);
+    do{
+        *databuf = w25q_transfer_byte(0x00);
+        databuf++;
+        buff_size--;
+    } while(buff_size > 0x00);
 
-    for(byte = 0; byte < buff_size; byte++){
-        databuf[byte] = w25q_read_byte();
-    }
-
+    W25Q_UNSELECT();
     w25q_write_disable();
 
     return;
 }
 
-
+/* ??? */
 void w25q_page_program(uint32_t address, uint8_t *databuf, uint8_t buff_size)
 {
     w25q_write_enable();
     W25Q_SELECT();
 
-    w25q_send_byte(W25Q_PAGE_PRG);
+    w25q_transfer_byte(W25Q_PAGE_PRG);
 
-    w25q_send_byte((address >> 16) & 0xFF);
-    w25q_send_byte((address >> 8) & 0xFF);
-    w25q_send_byte((address >> 0) & 0xFF);
+    w25q_transfer_byte((address >> 16) & 0xFF);
+    w25q_transfer_byte((address >> 8) & 0xFF);
+    w25q_transfer_byte((address >> 0) & 0xFF);
+    do{
+        w25q_transfer_byte(*databuf);
+        databuf++;
+        buff_size--;
+    } while(buff_size > 0x00);
 
-    for(uint8_t byte = 0; byte < buff_size; byte++){
-        w25q_send_byte(databuf[byte]);
-    }
-
+    W25Q_UNSELECT();
     w25q_write_disable();
+
     return;
 }
 
+
+/* Works correct */
 uint16_t w25q_read_manufacturer(void)
 {
     uint16_t device =0x0000;
+    uint8_t bytes[2] = {0x00, 0x00};
 
-    w25q_write_enable();
     W25Q_SELECT();
 
-    w25q_send_byte(W25Q_ID_MANF);
+    w25q_transfer_byte(W25Q_ID_MANF);
 
-    w25q_send_byte(0x00);
-    w25q_send_byte(0x00);
-    w25q_send_byte(0x00);
+    w25q_transfer_byte(0x00);
+    w25q_transfer_byte(0x00);
+    w25q_transfer_byte(0x01);
 
-    device = device | w25q_read_byte() << 8;
-    device = device | w25q_read_byte();
+    bytes[0] = w25q_transfer_byte(0x00);
+    bytes[1] = w25q_transfer_byte(0x00);
 
-    w25q_write_disable();
+    W25Q_UNSELECT();
+
+    device = ((device | bytes[0]) << 8) | ((device | bytes[1]) << 0);
 
     return device;
+}
+
+
+/* Works correct */
+void w25q_power_dwn_release(void)
+{
+    W25Q_SELECT();
+
+    w25q_transfer_byte(W25Q_PWR_DWN_RELEASE);
+
+    W25Q_UNSELECT();
+
+    return;
+}
+
+
+/* Works Correct */
+void w25q_power_dwn(void)
+{
+    W25Q_SELECT();
+
+    w25q_transfer_byte(W25Q_PWR_DWN);
+
+    W25Q_UNSELECT();
+
+    return;
 }
 
 

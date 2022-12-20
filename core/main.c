@@ -49,8 +49,6 @@ void spi_transmit(uint32_t SPIx, uint16_t *data, uint16_t size);
 
 int main(void)
 {
-    static uint8_t pack_data[7] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11};
-    static uint16_t pack[7] = { 'c', 'o', 'm', 'm', 'a', 'n', 'd' };
 
     clock_setup();
     gpio_setup();
@@ -58,7 +56,28 @@ int main(void)
     usart_setup();
     systick_setup();
 
-    //gpio_set(GPIOD, GPIO12 | GPIO13 | GPIO14 | GPIO15);
+    static uint16_t pack = 0x0000;
+
+    struct w25q_sr1 sr1;
+    struct w25q_sr2 sr2;
+
+    sr1.protect_1 = W25Q_SR1_UNPROTECT;
+    sr1.sector_protect = W25Q_SR1_SEC_NPRT;
+    sr1.topbtm_protect = W25Q_SR1_SEC_TB_NPRT;
+    sr1.block_protect = W25Q_SR1_BLCK_NPRT_2 |   \
+                        W25Q_SR1_BLCK_NPRT_1 |   \
+                        W25Q_SR1_BLCK_NPRT_0;    \
+
+    sr1.latch = W25Q_SR1_LATCH_WE;
+    sr1.status = 0x00;
+
+    sr2.suspend = 0x00;
+    sr2.quad_spi = W25Q_SR2_QUAD_DS;
+    sr2.protect_2 = W25Q_SR2_UNPROTECT;
+
+    w25q_power_dwn_release();
+
+    w25q_status_reg_write(&sr1, &sr2);
 
     while(1)
     {
@@ -77,24 +96,24 @@ int main(void)
             __asm__("nop");
         }
 #endif
-        sleep_ms(500);
-#ifdef STM_BLACK 
-        //if(usart_rx_flag == 1) led_blinking();
+        //sleep_ms(5000);
+#ifdef STM_BLACK
 
-        //gpio_toggle(GPIOA, GPIO1);
-        //usart_transmit(USART2, pack_data, 7);
-
-        //spi_rx_buffer[0] = w25q_status_reg_read(W25Q_SR1);
-
+        pack = w25q_read_manufacturer();
+        spi_rx_buffer[0] = (pack >> 8) & 0xFF;
+        spi_rx_buffer[1] = (pack >> 0) & 0xFF;
         
-        pack[0] = w25q_read_manufacturer();
-        spi_rx_buffer[0] = (pack[0] >> 8) & 0xFF;
-        spi_rx_buffer[1] = (pack[0] >> 0) & 0xFF;
-        pack[0] = 0x0000;
+        spi_rx_buffer[2] = w25q_status_reg_read(W25Q_SR1);
+        spi_rx_buffer[3] = w25q_status_reg_read(W25Q_SR2);      
+
+        //w25q_read_data(0x0000, spi_rx_buffer, 1);
+        usart_transmit(USART2, spi_rx_buffer, 4);
         
 #endif
-        usart_transmit(USART2, spi_rx_buffer, 2);
-        sleep_ms(10000);
+
+        led_blinking();
+
+        sleep_ms(500);
         
     }
 
@@ -132,7 +151,7 @@ static void clock_setup(void)
 static void systick_setup(void)
 {
     systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
-    systick_set_reload(2100 - 1);
+    systick_set_reload(21000 - 1);
     systick_counter_enable();
     systick_interrupt_enable();
 
@@ -181,9 +200,11 @@ static void spi_setup(void)
     /* SPI-1 MOSI configuration: */
     gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO5);
 
-    //gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO3);
-    //gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO4);
+    gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO3);
+    gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO4);
     gpio_set_output_options(GPIOB, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ, GPIO5);
+    
+    gpio_set_output_options(GPIOA, GPIO_OTYPE_PP, GPIO_OSPEED_50MHZ,GPIO15);
 
     gpio_set_af(GPIOB, GPIO_AF5, GPIO3);
     gpio_set_af(GPIOB, GPIO_AF5, GPIO4);
@@ -199,16 +220,18 @@ static void spi_setup(void)
     */
 
     /* Polarity CPHA=1, CPOL=0. !!! RM page 879 */
-    spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_128, SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
+    spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_256, SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
                     SPI_CR1_CPHA_CLK_TRANSITION_1, SPI_CR1_DFF_8BIT, SPI_CR1_MSBFIRST);
     
     /**
      * Set /CS management to software. Note, that nss pin must be set to high,
      * otherwise the spi peripheral will not send any data out.
     */
+    spi_enable_software_slave_management(SPI1);
+    spi_set_nss_high(SPI1);
 
-    //spi_enable_software_slave_management(SPI1);
-    //spi_set_nss_high(SPI1);
+    //spi_set_clock_phase_0(SPI1);
+    //spi_set_clock_polarity_0(SPI1);
 
     /* Enable SPI1 Receive interrupt */
     //spi_enable_rx_buffer_not_empty_interrupt(SPI1);
@@ -289,7 +312,7 @@ void usart2_isr(void)
     return;
 }
 
-
+/*
 void spi1_isr(void)
 {
     uint32_t spi_register = 0;
@@ -303,7 +326,7 @@ void spi1_isr(void)
 
     return;
 }
-
+*/
 
 void sys_tick_handler(void)
 {

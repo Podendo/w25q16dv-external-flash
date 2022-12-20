@@ -55,6 +55,36 @@
 #define W25Q_SR1                     0x01
 #define W25Q_SR2                     0x02
 
+/* Status registers bit values: */
+#define W25Q_SR1_PROTECT             (0x01 << 7)
+#define W25Q_SR1_UNPROTECT           (0x00 << 7)
+
+#define W25Q_SR1_SEC_PRT             (0x01 << 6)
+#define W25Q_SR1_SEC_NPRT            (0x00 << 6)
+
+#define W25Q_SR1_SEC_TB_PRT          (0x01 << 5)
+#define W25Q_SR1_SEC_TB_NPRT         (0x00 << 5)
+
+#define W25Q_SR1_BLCK_PRT_2          (0x01 << 4)
+#define W25Q_SR1_BLCK_PRT_1          (0x01 << 3)
+#define W25Q_SR1_BLCK_PRT_0          (0x01 << 2)
+
+#define W25Q_SR1_BLCK_NPRT_2         (0x00 << 4)
+#define W25Q_SR1_BLCK_NPRT_1         (0x00 << 3)
+#define W25Q_SR1_BLCK_NPRT_0         (0x00 << 2)
+
+#define W25Q_SR1_LATCH_WE            (0x01 << 1)
+#define W25Q_SR1_LATCH_WD            (0x00 << 1)
+#define W25Q_SR1_BUSY                (0x01 << 0)
+
+#define W25Q_SR2_SUSPEND             (0x01 << 7)
+
+#define W25Q_SR2_QUAD_EN             (0x01 << 1)
+#define W25Q_SR2_QUAD_DS             (0x00 << 1)
+
+#define W25Q_SR2_PROTECT             (0x01 << 0)
+#define W25Q_SR2_UNPROTECT           (0x00 << 0)  
+
 /* MACRO FUNCTIONS FOR SETTING ADDRESSES*/
 #define SET_BLOCK(BLOCK)                         \
         ((W25Q_BLOCK_ZER_ADDR | BLOCK) << 16)    
@@ -70,22 +100,41 @@
 #include "inttypes.h"
 
 extern volatile uint32_t flash_sys_ms;
+extern void sleep_ms(uint32_t delay_millis);
+
+
+struct w25q_sr1
+{
+    uint8_t protect_1;
+    uint8_t sector_protect;
+    uint8_t topbtm_protect;
+    uint8_t block_protect;
+
+    uint8_t latch;
+    uint8_t status;
+};
+
+
+struct w25q_sr2
+{
+    uint8_t suspend;
+    uint8_t quad_spi;
+    uint8_t protect_2;
+};
+
 
 /**
- * Send one byte using libopencm3 spi functions. Initialization of
- * this SPI must be done in main.c file according to ds parameters.
- * Before using this function you need to SELECT/UNSELECT NSS pin
- * with macro functions (in flash source file).
+ * Timelimit exception - SPI Tx-Rx timeout handler.
 */
-void w25q_send_byte(uint8_t data);
-/* Done, checked */
+uint8_t w25q_handler(void);
 
 /**
- * This function returns the output of SPIx_DR using libopencm3 lib
- * spi_read function.
+ * To-Do:
+ * Basic functions for SPI. Note that this function do not have
+ * timeout check. It would be implemented soon
 */
-uint8_t w25q_read_byte(void);
-/* Done, checked */
+uint8_t w25q_transfer_byte(uint8_t data);
+
 
 /**
  * Write enable (06h) sets the WEL bit in SR to 1. This bit
@@ -123,7 +172,7 @@ uint8_t w25q_status_reg_read(uint8_t SRx);
  * Drive /CS low, send instruction code 01h, You can ONLY write 7,5,4,3,2
  * bits of SR_1 and 9, 8 bits of SR_2 
 */
-void w25q_status_reg_write(uint8_t SRx, uint8_t reg_bits);
+void w25q_status_reg_write(struct w25q_sr1 *sr1, struct w25q_sr2 *sr2);
 /* Not done */
 
 /**
@@ -254,14 +303,14 @@ uint8_t w25q_erase_resume(uint8_t byte_0);
 /**
  * Power-down B9h - reduce the power-down instruction.
 */
-uint8_t w25q_power_dwn(uint8_t byte_0);
+void w25q_power_dwn(void);
 /* Not done */
 
 /** Release Power-down / Deice-ID ABh is a multi-puprose instruction
  * It can be used to release the device from the power-down state or
  * obtain the devices electronic identification (ID) number.
 */
-uint8_t w25q_power_dwn_release(uint8_t byte_0);
+void w25q_power_dwn_release(void);
 /* Not done */
 
 /**
