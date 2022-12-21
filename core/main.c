@@ -22,8 +22,8 @@ static volatile uint32_t sys_millis;
 static volatile uint8_t usart_rx_flag;
 
 
-static  uint16_t usart_rx_buffer[128];
-static  uint16_t spi_rx_buffer[128];
+static  uint8_t usart_rx_buffer[128];
+static  uint8_t spi_rx_buffer[128];
 
 static volatile uint8_t urxb = 0;
 static volatile uint8_t srxb = 0;
@@ -43,9 +43,10 @@ void led_blinking(void);
 void usart2_isr(void);
 void spi1_isr(void);
 
-void usart_transmit(uint32_t USARTx, uint16_t *data, uint16_t size);
-void spi_transmit(uint32_t SPIx, uint16_t *data, uint16_t size);
+void usart_transmit(uint32_t USARTx, uint8_t *data, uint8_t size);
+void spi_transmit(uint32_t SPIx, uint8_t *data, uint8_t size);
 
+/*#######################################################*/
 
 int main(void)
 {
@@ -56,28 +57,37 @@ int main(void)
     usart_setup();
     systick_setup();
 
+    w25q_power_dwn();
+
     static uint16_t pack = 0x0000;
+    uint8_t page_data[12] = {'l', 'o', 'r', 'e', 'm', ' ', 'i', 'p', 's', 'u', 'm', '\n'};
 
     struct w25q_sr1 sr1;
     struct w25q_sr2 sr2;
 
     sr1.protect_1 = W25Q_SR1_UNPROTECT;
-    sr1.sector_protect = W25Q_SR1_SEC_NPRT;
+
     sr1.topbtm_protect = W25Q_SR1_SEC_TB_NPRT;
+
     sr1.block_protect = W25Q_SR1_BLCK_NPRT_2 |   \
                         W25Q_SR1_BLCK_NPRT_1 |   \
                         W25Q_SR1_BLCK_NPRT_0;    \
 
-    sr1.latch = W25Q_SR1_LATCH_WE;
-    sr1.status = 0x00;
-
-    sr2.suspend = 0x00;
     sr2.quad_spi = W25Q_SR2_QUAD_DS;
     sr2.protect_2 = W25Q_SR2_UNPROTECT;
 
     w25q_power_dwn_release();
 
-    w25q_status_reg_write(&sr1, &sr2);
+    //w25q_erase_field(0x00, W25Q_ERASE_CHIP_TYPE);
+    //w25q_write_status_reg(&sr1, &sr2);
+
+    spi_rx_buffer[0] = w25q_read_status_reg(W25Q_SR1);
+    spi_rx_buffer[1] = w25q_read_status_reg(W25Q_SR2);
+
+    usart_transmit(USART2, spi_rx_buffer, 2);
+
+    //w25q_power_dwn();
+    uint8_t device_uid[8];
 
     while(1)
     {
@@ -96,30 +106,40 @@ int main(void)
             __asm__("nop");
         }
 #endif
-        //sleep_ms(5000);
-#ifdef STM_BLACK
 
+#ifdef STM_BLACK    
+
+        if(gpio_get(GPIOA, GPIO0)){
+            w25q_power_dwn_release();
+            w25q_erase_field(0x000000, W25Q_ERASE_SECTOR_TYPE);
+        }
+
+        w25q_read_unique_id(device_uid);
+        //usart_transmit(USART2, device_uid, 8);
+        
         pack = w25q_read_manufacturer();
-        spi_rx_buffer[0] = (pack >> 8) & 0xFF;
-        spi_rx_buffer[1] = (pack >> 0) & 0xFF;
-        
-        spi_rx_buffer[2] = w25q_status_reg_read(W25Q_SR1);
-        spi_rx_buffer[3] = w25q_status_reg_read(W25Q_SR2);      
+        spi_rx_buffer[0] = pack >> 8;
+        spi_rx_buffer[1] = pack >> 0;
+        //usart_transmit(USART2, spi_rx_buffer, 2);
 
-        //w25q_read_data(0x0000, spi_rx_buffer, 1);
-        usart_transmit(USART2, spi_rx_buffer, 4);
-        
+        w25q_page_program(0x00, page_data, 12);
+
+        w25q_read_data(0x00, spi_rx_buffer, 12);
+
+        usart_transmit(USART2, spi_rx_buffer, 12);
+
 #endif
 
         led_blinking();
 
-        sleep_ms(500);
+        sleep_ms(1000);
         
     }
 
     return 0;
 }
 
+/*#######################################################*/
 
 /* ________________ FUNCTION PROTOTYPES ________________ */
 
@@ -132,6 +152,7 @@ extern void sleep_ms(uint32_t delay_millis)
     return;
 }
 
+/*_______________________________________________________*/
 
 static void clock_setup(void)
 {
@@ -147,6 +168,7 @@ static void clock_setup(void)
     return;
 }
 
+/*_______________________________________________________*/
 
 static void systick_setup(void)
 {
@@ -158,6 +180,7 @@ static void systick_setup(void)
     return;
 }
 
+/*_______________________________________________________*/
 
 static void gpio_setup(void)
 {
@@ -180,6 +203,7 @@ static void gpio_setup(void)
     return;
 }
 
+/*_______________________________________________________*/
 
 /**
  *  Configure peripherals: SCK -> PB3,
@@ -220,8 +244,10 @@ static void spi_setup(void)
     */
 
     /* Polarity CPHA=1, CPOL=0. !!! RM page 879 */
-    spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_256, SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,
-                    SPI_CR1_CPHA_CLK_TRANSITION_1, SPI_CR1_DFF_8BIT, SPI_CR1_MSBFIRST);
+    spi_init_master(SPI1, SPI_CR1_BAUDRATE_FPCLK_DIV_256,   \
+                    SPI_CR1_CPOL_CLK_TO_0_WHEN_IDLE,        \
+                    SPI_CR1_CPHA_CLK_TRANSITION_1,          \
+                    SPI_CR1_DFF_8BIT, SPI_CR1_MSBFIRST);    \
     
     /**
      * Set /CS management to software. Note, that nss pin must be set to high,
@@ -229,9 +255,6 @@ static void spi_setup(void)
     */
     spi_enable_software_slave_management(SPI1);
     spi_set_nss_high(SPI1);
-
-    //spi_set_clock_phase_0(SPI1);
-    //spi_set_clock_polarity_0(SPI1);
 
     /* Enable SPI1 Receive interrupt */
     //spi_enable_rx_buffer_not_empty_interrupt(SPI1);
@@ -243,8 +266,9 @@ static void spi_setup(void)
     return;
 }
 
+/*_______________________________________________________*/
 
-void spi_transmit(uint32_t SPIx, uint16_t *data, uint16_t size)
+void spi_transmit(uint32_t SPIx, uint8_t *data, uint8_t size)
 {
     for(int i = 0; i < size; i++){
         spi_send(SPIx, data[i]);
@@ -252,6 +276,7 @@ void spi_transmit(uint32_t SPIx, uint16_t *data, uint16_t size)
     return;
 }
 
+/*_______________________________________________________*/
 
 static void usart_setup(void)
 {
@@ -287,7 +312,9 @@ static void usart_setup(void)
     return;
 }
 
-void usart_transmit(uint32_t USARTx, uint16_t *data, uint16_t size)
+/*_______________________________________________________*/
+
+void usart_transmit(uint32_t USARTx, uint8_t *data, uint8_t size)
 {
     for(int i = 0; i < size; i++){
         usart_send_blocking(USARTx, data[i]);
@@ -295,6 +322,7 @@ void usart_transmit(uint32_t USARTx, uint16_t *data, uint16_t size)
     return;
 }
 
+/*_______________________________________________________*/
 
 void usart2_isr(void)
 {
@@ -312,6 +340,8 @@ void usart2_isr(void)
     return;
 }
 
+/*_______________________________________________________*/
+
 /*
 void spi1_isr(void)
 {
@@ -328,6 +358,8 @@ void spi1_isr(void)
 }
 */
 
+/*_______________________________________________________*/
+
 void sys_tick_handler(void)
 {
     sys_millis += 1;
@@ -335,6 +367,7 @@ void sys_tick_handler(void)
     return;
 }
 
+/*_______________________________________________________*/
 
 void led_blinking(void)
 {
